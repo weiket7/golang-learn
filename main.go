@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"example/golang-learn/helpers/errors"
+	"example/golang-learn/controllers"
+	"example/golang-learn/services"
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"sync"
 
-	z "github.com/Oudwins/zog"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -37,8 +35,6 @@ type Config struct {
 }
 
 func main() {
-	//ctx := context.Background()
-
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
 	logger := zerolog.New(os.Stdout)
@@ -76,97 +72,18 @@ func main() {
 		Str("foo", "bar").
 		Msg("")
 
+	userService := services.NewUserService(ctx)
+	userController := controllers.NewUserController(ctx, userService)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot)
 
-	mux.HandleFunc("POST /users", createUser)
-	mux.HandleFunc("GET /users/{id}", getUser)
-	mux.HandleFunc("DELETE /users/{id}", deleteUser)
+	mux.HandleFunc("POST /users", userController.CreateUser)
+	mux.HandleFunc("GET /users/{id}", userController.GetUser)
+	mux.HandleFunc("DELETE /users/{id}", userController.DeleteUser)
 
 	fmt.Println("Server listening to :8081")
 	http.ListenAndServe(":8081", mux)
-}
-
-func deleteUser(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if _, ok := userCache[id]; !ok {
-		http.NotFound(w, r)
-	}
-
-	cacheMutex.Lock()
-	delete(userCache, id)
-	cacheMutex.Unlock()
-
-	fmt.Println("delete user id:", id)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func getUser(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	fmt.Println("get user id:", id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	cacheMutex.RLock()
-	user, ok := userCache[id]
-	cacheMutex.RUnlock()
-
-	if !ok {
-		http.NotFound(w, r)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	j, err := json.Marshal(user)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(j)
-}
-
-func createUser(w http.ResponseWriter, r *http.Request) {
-	var user User
-	err := json.NewDecoder(r.Body).Decode(&user)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	log.Log().Interface("user", user).Msg("user")
-
-	var userSchema = z.Struct(z.Shape{
-		"name": z.String().Required().Min(3).Max(10),
-		//"age":  z.Int().GT(18),
-	})
-	errs := userSchema.Validate(&user)
-	if errs != nil {
-		fmt.Println(errs)
-
-		errorResponse := errors.NewValidationError(errs)
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(errorResponse)
-		return
-	}
-
-	//if user.Name == "" {
-	//	http.Error(w, "Name is required", http.StatusBadRequest)
-	//	return
-	//}
-
-	cacheMutex.Lock()
-	userId := len(userCache) + 1
-	userCache[userId] = user
-	cacheMutex.Unlock()
-	fmt.Println("create user id:", userId)
-
-	w.WriteHeader(http.StatusCreated)
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
