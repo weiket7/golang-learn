@@ -1,52 +1,26 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
+	"example/golang-learn/helpers/errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 
+	z "github.com/Oudwins/zog"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
 )
 
 //https://go.dev/doc/tutorial/web-service-gin
 
-type album struct {
-	ID     string  `json:"id"`
-	Title  string  `json:"title"`
-	Artist string  `json:"artist"`
-	Price  float64 `json:"price"`
-}
-
-var albums = []album{
-	{ID: "1", Title: "Blue Train", Artist: "John Coltrane", Price: 56.99},
-	{ID: "2", Title: "Jeru", Artist: "Gerry Mulligan", Price: 17.99},
-	{ID: "3", Title: "Sarah Vaughan and Clifford Brown", Artist: "Sarah Vaughan", Price: 39.99},
-}
-
-var schema = `
-CREATE TABLE person (
-    first_name text,
-    last_name text,
-    email text
-);
-
-CREATE TABLE place (
-    country text,
-    city text NULL,
-    telcode integer
-)`
-
-type Place struct {
-	Country string
-	City    sql.NullString
-	TelCode int
-}
-
 type User struct {
-	Name string `json: "name"`
+	Name string `json:"name"`
 }
 
 var userCache = make(map[int]User)
@@ -57,35 +31,50 @@ var cacheMutex sync.RWMutex
 // blocks all read and write when mutex is locked
 // mutex in general is a safe way to synchronise data in multithreaded app
 
+type Config struct {
+	Env                string
+	DbConnectionString string
+}
+
 func main() {
 	//ctx := context.Background()
 
-	//log.Print("hello world")
-	//
-	//db, err := sqlx.Connect("mysql", "root:GetGoing!@tcp(127.0.0.1:3306)/golang?multiStatements=true")
-	//if err != nil {
-	//	log.Fatal().Err(err).Msg("failed to connect to database")
-	//}
-	//
-	////db.MustExec(schema)
-	//
-	////tx := db.MustBegin()
-	////tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES (?, ?, ?)", "Jason", "Moiron", "jmoiron@jmoiron.net")
-	////tx.MustExec("INSERT INTO person (first_name, last_name, email) VALUES (?, ?, ?)", "John", "Doe", "johndoeDNE@gmail.net")
-	////tx.MustExec("INSERT INTO place (country, city, telcode) VALUES (?, ?, ?)", "United States", "New York", "1")
-	////tx.MustExec("INSERT INTO place (country, telcode) VALUES (?, ?)", "Hong Kong", "852")
-	////tx.MustExec("INSERT INTO place (country, telcode) VALUES (?, ?)", "Singapore", "65")
-	////// Named queries can use structs, so if you have an existing struct (i.e. person := &Person{}) that you have populated, you can pass it in as &person
-	////tx.NamedExec("INSERT INTO person (first_name, last_name, email) VALUES (:first_name, :last_name, :email)", &Person{"Jane", "Citizen", "jane.citzen@example.com"})
-	////tx.Commit()
-	//
-	//// Query the database, storing results in a []Person (wrapped in []interface{})
-	//var people []dtos.Person
-	////people := []dtos.Person{}
-	//db.Select(&people, "SELECT * FROM person ORDER BY first_name ASC")
-	//jason, john := people[0], people[1]
-	//
-	//fmt.Printf("%#v\n%#v", jason, john)
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	logger := zerolog.New(os.Stdout)
+	ctx := context.Background()
+
+	ctx = logger.WithContext(ctx)
+
+	//set min level info
+	//zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+	//appEnv := os.Getenv("APP_ENV")
+	//fmt.Println("Application Environment:", appEnv)
+
+	v := viper.New()
+	v.SetConfigFile(".env")
+	err := v.ReadInConfig()
+	if err != nil {
+		//log.Fatal().Err(err).Msg("Error reading config file")
+		panic(fmt.Errorf("fatal error config file: %w", err))
+	}
+	env := v.GetString("ENVIRONMENT")
+	fmt.Println("environment: ", env)
+
+	cfg := &Config{}
+	err = v.Unmarshal(&cfg)
+	if err != nil {
+		panic(fmt.Errorf("fatal error config file: %w", err))
+		return
+	}
+
+	log.Log().Interface("config", cfg).Msg("config loaded")
+
+	log.Print("hello world")
+	log.Log().
+		Str("foo", "bar").
+		Msg("")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot)
@@ -143,18 +132,33 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 	w.Write(j)
 }
 
-func createUser(writer http.ResponseWriter, request *http.Request) {
+func createUser(w http.ResponseWriter, r *http.Request) {
 	var user User
-	err := json.NewDecoder(request.Body).Decode(&user)
+	err := json.NewDecoder(r.Body).Decode(&user)
 	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Log().Interface("user", user).Msg("user")
+
+	var userSchema = z.Struct(z.Shape{
+		"name": z.String().Required().Min(3).Max(10),
+		//"age":  z.Int().GT(18),
+	})
+	errs := userSchema.Validate(&user)
+	if errs != nil {
+		fmt.Println(errs)
+
+		errorResponse := errors.NewValidationError(errs)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		json.NewEncoder(w).Encode(errorResponse)
 		return
 	}
 
-	if user.Name == "" {
-		http.Error(writer, "Name is required", http.StatusBadRequest)
-		return
-	}
+	//if user.Name == "" {
+	//	http.Error(w, "Name is required", http.StatusBadRequest)
+	//	return
+	//}
 
 	cacheMutex.Lock()
 	userId := len(userCache) + 1
@@ -162,7 +166,7 @@ func createUser(writer http.ResponseWriter, request *http.Request) {
 	cacheMutex.Unlock()
 	fmt.Println("create user id:", userId)
 
-	writer.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusCreated)
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
