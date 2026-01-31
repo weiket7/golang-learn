@@ -49,11 +49,6 @@ func (c *UserController) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//if user.Name == "" {
-	//	http.Error(w, "Name is required", http.StatusBadRequest)
-	//	return
-	//}
-
 	userId := c.userService.CreateUser(user)
 	fmt.Println("User created ", userId)
 
@@ -66,14 +61,6 @@ func (c *UserController) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	//
-	//if _, ok := userCache[id]; !ok {
-	//	http.NotFound(w, r)
-	//}
-	//
-	//cacheMutex.Lock()
-	//delete(userCache, id)
-	//cacheMutex.Unlock()
 
 	if err = c.userService.DeleteUser(id); err != nil {
 		http.NotFound(w, r)
@@ -90,14 +77,6 @@ func (c *UserController) GetUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	//cacheMutex.RLock()
-	//user, ok := userCache[id]
-	//cacheMutex.RUnlock()
-
-	//if !ok {
-	//	http.NotFound(w, r)
-	//}
 
 	user, err := c.userService.GetUser(id)
 	fmt.Println("get user id:", user)
