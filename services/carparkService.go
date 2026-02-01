@@ -28,17 +28,34 @@ func NewCarparkService(coll *mongo.Collection) *CarparkService {
 	}
 }
 
-func (s *CarparkService) InsertCarpark(newCarpark *models.Carpark) error {
+func (s *CarparkService) AddCarpark(newCarpark *models.Carpark) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := s.coll.InsertOne(ctx, newCarpark)
-	if err != nil || result == nil {
-		return err
+	// 1. Find the highest INT id
+	// We add a filter to ONLY look at documents where _id is a number (Type 1 or 16/18 in BSON)
+	// This prevents the ObjectID error.
+	filter := bson.M{"_id": bson.M{"$type": "number"}}
+	opts := options.FindOne().SetSort(bson.M{"_id": -1})
+
+	var lastDoc struct {
+		ID int `bson:"_id"`
 	}
 
-	//fmt.Printf("Inserted Carpark with VehicleId: %v\n", result.InsertedID)
-	return nil
+	err := s.coll.FindOne(ctx, filter, opts).Decode(&lastDoc)
+
+	newID := 1
+	if err == nil {
+		newID = lastDoc.ID + 1
+	} else if err != mongo.ErrNoDocuments {
+		// If it still fails, it means even the "number" couldn't decode
+		return fmt.Errorf("failed to determine next ID: %w", err)
+	}
+
+	// 2. Assign and Insert
+	newCarpark.Id = newID
+	_, err = s.coll.InsertOne(ctx, newCarpark)
+	return err
 }
 
 func (s *CarparkService) UpdatePostalCode(carparkName string, postalCode string) error {
@@ -70,7 +87,7 @@ func (s *CarparkService) GetCarpark(postalCode string) (*models.Carpark, error) 
 	return &carpark, nil
 }
 
-func (s *CarparkService) GetAvailableCarparks(lon, lat float64, start, end time.Time) ([]models.Carpark, error) {
+func (s *CarparkService) GetAvailableVehicles(lon, lat float64, start, end time.Time) ([]models.Carpark, error) {
 	// 1. Ensure UTC for MongoDB compatibility
 	start = start.UTC()
 	end = end.UTC()
@@ -133,7 +150,7 @@ func (s *CarparkService) GetAvailableCarparks(lon, lat float64, start, end time.
 	return results, nil
 }
 
-func (s *CarparkService) DeleteVehicleFromCarpark(carparkName string, plateNumber string) error {
+func (s *CarparkService) RemoveVehicleFromCarpark(carparkName string, plateNumber string) error {
 	// 1. Filter: Find the specific carpark
 	filter := bson.M{"name": carparkName}
 
@@ -153,25 +170,70 @@ func (s *CarparkService) DeleteVehicleFromCarpark(carparkName string, plateNumbe
 	return nil
 }
 
-func (s *CarparkService) AddVehicleToCarpark(carparkName string, vehicle *models.Vehicle) error {
-	// 2. Filter: Find the specific carpark
-	filter := bson.M{"name": carparkName}
+func (s *CarparkService) AddVehicleToCarpark(req *dtos.AddVehicleRequest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// 3. Update: $push the vehicle into the 'vehicles' slice
+	// 1. Find the largest Vehicle ID across ALL carparks
+	//Since vehicles are inside an array in every carpark document, we use $unwind to flatten them all into one list
+	//then $max to find the highest _id currently in the database.
+	pipeline := mongo.Pipeline{
+		{{Key: "$unwind", Value: "$vehicles"}}, //
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: nil},
+			{Key: "maxId", Value: bson.D{{Key: "$max", Value: "$vehicles._id"}}},
+		}}},
+	}
+
+	cursor, err := s.coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		return err
+	}
+
+	var results []bson.M
+	if err = cursor.All(ctx, &results); err != nil {
+		return err
+	}
+
+	newVehicleId := 1
+	if len(results) > 0 && results[0]["maxId"] != nil {
+		// Convert the result to int (Mongo usually returns int32 or int64)
+		if maxId, ok := results[0]["maxId"].(int32); ok {
+			newVehicleId = int(maxId) + 1
+		} else if maxId, ok := results[0]["maxId"].(int64); ok {
+			newVehicleId = int(maxId) + 1
+		}
+	}
+
+	// 2. Build the Vehicle object
+	vehicle := models.Vehicle{
+		Id:          newVehicleId, // Assign the incremented ID
+		MakeName:    req.MakeName,
+		ModelName:   req.ModelName,
+		PlateNumber: req.PlateNumber,
+		Seats:       req.Seats,
+		Lots:        req.Lots,
+		Images:      req.Images,
+		Schedules:   []models.Schedule{},
+	}
+
+	// 3. Update the specific carpark
+	filter := bson.M{"name": req.CarparkName}
 	update := bson.M{
 		"$push": bson.M{
 			"vehicles": vehicle,
 		},
 	}
 
-	// 4. Execute
-	result, err := s.coll.UpdateOne(context.TODO(), filter, update)
+	result, err := s.coll.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return err
 	}
-	if result == nil || result.ModifiedCount == 0 {
-		return fmt.Errorf("AddVehicleToCarpark could not add vehicle %s to carpark %s", vehicle.Id, carparkName)
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("carpark '%s' not found", req.CarparkName)
 	}
+
 	return nil
 }
 
@@ -196,9 +258,9 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 			return err
 		}
 
-		// 1. Parse Data
 		vId, _ := strconv.Atoi(record[0])
 		numSeats, _ := strconv.Atoi(record[2])
+		priceGroupId, _ := strconv.Atoi(record[13])
 		cpId, _ := strconv.Atoi(record[4])
 		lat, _ := strconv.ParseFloat(record[8], 64)
 		lon, _ := strconv.ParseFloat(record[9], 64)
@@ -206,22 +268,21 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 		var cpLots []models.Lot
 		json.Unmarshal([]byte(record[15]), &cpLots)
 
-		// 2. Prepare the Vehicle object
 		newVehicle := models.Vehicle{
-			Id:             vId,
-			MakeName:       record[10],
-			ModelName:      record[11],
-			PlateNumber:    record[1],
-			Seats:          numSeats,
-			PriceGroupName: record[13],
-			Images:         []string{record[14]},
-			Schedules:      []models.Schedule{},
+			Id:           vId,
+			MakeName:     record[10],
+			ModelName:    record[11],
+			PlateNumber:  record[1],
+			Seats:        numSeats,
+			PriceGroupId: priceGroupId,
+			Images:       []string{record[14]},
+			Schedules:    []models.Schedule{},
+			Lots:         cpLots,
 		}
 
-		// 3. Define the Filter (Find the carpark by ID)
 		filter := bson.M{"_id": cpId}
 
-		// 4. Define the Atomic Update
+		// atomic update
 		update := bson.M{
 			// $setOnInsert only runs when the document is being CREATED
 			"$setOnInsert": bson.M{
@@ -232,7 +293,6 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 					"type":        "Point",
 					"coordinates": []float64{lon, lat},
 				},
-				"lots": cpLots,
 			},
 			// $addToSet adds the vehicle only if it doesn't already exist in the array
 			"$addToSet": bson.M{
@@ -240,7 +300,6 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 			},
 		}
 
-		// 5. Execute Upsert
 		opts := options.UpdateOne().SetUpsert(true)
 		_, err = s.coll.UpdateOne(context.Background(), filter, update, opts)
 		if err != nil {
@@ -251,7 +310,7 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 	return nil
 }
 
-func (s *CarparkService) AddVehicleSchedule(req dtos.AddScheduleRequest) error {
+func (s *CarparkService) AddScheduleToVehicle(req dtos.AddScheduleRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -291,6 +350,42 @@ func (s *CarparkService) AddVehicleSchedule(req dtos.AddScheduleRequest) error {
 		return fmt.Errorf("failed to update schedule: %w", err)
 	}
 
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("carpark %d or vehicle %d not found", req.CarparkId, req.VehicleId)
+	}
+
+	return nil
+}
+
+func (s *CarparkService) DeleteScheduleFromVehicle(req dtos.AddScheduleRequest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. Filter the parent Carpark document
+	filter := bson.M{"_id": req.CarparkId}
+
+	// 2. Define the Update logic
+	// $pull removes the element from the schedules array that matches the bookingId
+	update := bson.M{
+		"$pull": bson.M{
+			"vehicles.$[v].schedules": bson.M{
+				"bookingId": req.BookingId,
+			},
+		},
+	}
+
+	// 3. ArrayFilter to identify the specific vehicle inside the array
+	opts := options.UpdateOne().SetArrayFilters([]any{
+		bson.M{"v._id": req.VehicleId},
+	})
+
+	// 4. Execute the update
+	result, err := s.coll.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to delete schedule: %w", err)
+	}
+
+	// 5. Verify if something was actually found
 	if result.MatchedCount == 0 {
 		return fmt.Errorf("carpark %d or vehicle %d not found", req.CarparkId, req.VehicleId)
 	}

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/rs/zerolog"
@@ -77,60 +76,6 @@ func main() {
 	//	Msg("")
 
 	carparkService := services.NewCarparkService(collection)
-
-	//newCarpark := models.Carpark{
-	//	Id:         123,
-	//	Name:       "SB17",
-	//	PostalCode: "750503",
-	//	Address:    "504 MONTREAL DRIVE MONTREAL SPRING SINGAPORE 750504",
-	//	Location: models.Location{
-	//		Type:        "Point",
-	//		Coordinates: []float64{103.823678171092, 1.45089251057067},
-	//	},
-	//	Lots: []models.Lot{
-	//		{Level: "5A", LotNumber: "355"},
-	//	},
-	//	Vehicles: []models.Vehicle{},
-	//}
-	//err = carparkService.InsertCarpark(&newCarpark)
-
-	//newVehicle := models.Vehicle{
-	//	Id:             13,
-	//	MakeName:       "Mazda",
-	//	ModelName:      "2",
-	//	PlateNumber:    "SLR9553A",
-	//	Seats:          5,
-	//	Images:         []string{"c57ab461-9df3-43ad-b541-051cc95c8c45_car.png"},
-	//	PriceGroupName: "Standard",
-	//}
-	//err = carparkService.AddVehicleToCarpark("SB17", &newVehicle)
-	//if err != nil {
-	//	fmt.Println(err)
-	//	fmt.Println("error adding vehicle to carpark")
-	//}
-
-	//err = carparkService.ImportVehicles("vehicles.csv")
-
-	//carpark, err := carparkService.GetCarpark("750504")
-	//fmt.Println(carpark)
-
-	reqStart := time.Date(2026, 2, 2, 10, 0, 0, 0, time.UTC)
-	reqEnd := time.Date(2026, 2, 2, 11, 30, 0, 0, time.UTC)
-	carparks, err := carparkService.GetAvailableCarparks(103.820052, 1.449466, reqStart, reqEnd)
-	for _, c := range carparks {
-		fmt.Printf("Carpark: %v | Distance: %.2f meters\n", c.Name, c.Distance)
-	}
-	//err = carparkService.DeleteVehicleFromCarpark("SB17", "SLR9553A")
-
-	//err = carparkService.UpdatePostalCode(collection, "SB17", "750503")
-	//if err != nil {
-	//	fmt.Println("Could not update carpark")
-	//	fmt.Println(err)
-	//} else {
-	//	fmt.Println("Carpark updated")
-	//	fmt.Println(carpark)
-	//}
-
 	settingService := services.NewSettingService(settingCollection)
 	_ = settingService.Set("RadiusKm", "20")
 	radius, _ := settingService.GetInt("RadiusKm", 20)
@@ -146,8 +91,13 @@ func main() {
 	mux.HandleFunc("POST /users", userController.CreateUser)
 	mux.HandleFunc("GET /users/{id}", userController.GetUser)
 	mux.HandleFunc("DELETE /users/{id}", userController.DeleteUser)
+
 	mux.HandleFunc("GET /carparks", carparkController.GetCarparks)
+	mux.HandleFunc("POST /carparks", carparkController.AddCarpark)
+	mux.HandleFunc("POST /vehicles", carparkController.AddVehicle)
+	mux.HandleFunc("DELETE /vehicles", carparkController.RemoveVehicle)
 	mux.HandleFunc("POST /schedules", carparkController.AddSchedule)
+	mux.HandleFunc("DELETE /schedules", carparkController.RemoveSchedule)
 
 	fmt.Println("Server listening to :8081")
 	http.ListenAndServe(":8081", mux)

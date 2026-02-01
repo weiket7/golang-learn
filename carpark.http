@@ -1,0 +1,72 @@
+### Get carparks
+GET http://localhost:8081/carparks
+Content-Type: application/json
+Accept-Language: en-US,en;q=0.5
+
+{
+  "latitude": 1.449466,
+  "longitude": 103.820052,
+  "start": "2026-02-02T09:00:00Z",
+  "end": "2026-02-02T10:00:00Z"
+}
+
+
+### Add schedule
+POST http://localhost:8081/schedules
+Content-Type: application/json
+Accept-Language: en-US,en;q=0.5
+
+{
+  "carparkId": 532,
+  "vehicleId": 529,
+  "bookingId": 6000000,
+  "start": "2026-02-02T10:00:00Z",
+  "end": "2026-02-02T12:00:00Z"
+}
+
+
+### Delete schedule
+DELETE http://localhost:8081/schedules
+Content-Type: application/json
+Accept-Language: en-US,en;q=0.5
+
+{
+  "carparkId": 532,
+  "vehicleId": 529,
+  "bookingId": 0
+}
+
+
+### Add carpark
+POST http://localhost:8081/carparks
+Content-Type: application/json
+Accept-Language: en-US,en;q=0.5
+
+{
+  "name": "ABC",
+  "postalCode": "532800",
+  "address": "800 Tampines Ave 8",
+  "location": {
+    "type": "Point",
+    "coordinates": [103.902160274039, 1.41803209660986]
+  },
+  "vehicles": []
+}
+
+
+### Add vehicle
+POST http://localhost:8081/vehicles
+Content-Type: application/json
+Accept-Language: en-US,en;q=0.5
+
+{
+  "carparkName": "ABC",
+  "makeName": "Mazda",
+  "modelName": "3",
+  "plateNumber": "SLR9553A",
+  "priceGroupId": 1,
+  "priceGroupName": "Standard",
+  "seats": 5,
+  "images": [],
+  "lots": []
+}

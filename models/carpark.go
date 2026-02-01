@@ -21,8 +21,10 @@ type Vehicle struct {
 	PlateNumber    string     `bson:"plateNumber"`
 	Seats          int        `bson:"seats"`
 	PriceGroupName string     `bson:"priceGroupName"`
+	PriceGroupId   int        `bson:"priceGroupId"`
 	Images         []string   `bson:"images"`
 	Schedules      []Schedule `bson:"schedules"`
+	Lots           []Lot      `bson:"lots"`
 }
 
 type Carpark struct {
@@ -33,9 +35,9 @@ type Carpark struct {
 	Vehicles          []Vehicle `bson:"vehicles"`
 	HasSlashedVehicle bool      `bson:"hasSlashedVehicle"`
 	Address           string    `bson:"address"`
-	Lots              []Lot     `bson:"lots"`
 	Distance          float64   `bson:"dist" json:"distance"`
 	AvailableVehicles int       `bson:"availableVehicles"` // Matches the added field
+	TotalVehicles     int       `bson:"totalVehicles"`     // Matches the added field
 }
 
 type Lot struct {
