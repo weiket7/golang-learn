@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"example/golang-learn/controllers"
-	"example/golang-learn/dtos"
 	"example/golang-learn/services"
 	"example/golang-learn/utilities/db"
 	"fmt"
@@ -135,11 +133,12 @@ func main() {
 
 	settingService := services.NewSettingService(settingCollection)
 	_ = settingService.Set("RadiusKm", "20")
-	//_ = settingService.Set("NewKey")
 	radius, _ := settingService.GetInt("RadiusKm", 20)
 	fmt.Printf("RadiusKm: %v\n", radius)
+
 	userService := services.NewUserService(ctx)
 	userController := controllers.NewUserController(ctx, userService)
+	carparkController := controllers.NewCarparkController(ctx, carparkService)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot)
@@ -147,35 +146,11 @@ func main() {
 	mux.HandleFunc("POST /users", userController.CreateUser)
 	mux.HandleFunc("GET /users/{id}", userController.GetUser)
 	mux.HandleFunc("DELETE /users/{id}", userController.DeleteUser)
-	mux.HandleFunc("GET /carparks", getCarparks(carparkService))
+	mux.HandleFunc("GET /carparks", carparkController.GetCarparks)
+	mux.HandleFunc("POST /schedules", carparkController.AddSchedule)
 
 	fmt.Println("Server listening to :8081")
 	http.ListenAndServe(":8081", mux)
-}
-
-func getCarparks(service *services.CarparkService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var request dtos.CarparksRequest
-
-		// Note: GET requests usually don't have a body.
-		// If you are using a Body, ensure the client sends one,
-		// otherwise, you'd parse from r.URL.Query()
-		err := json.NewDecoder(r.Body).Decode(&request)
-		if err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		// Now you can use the service!
-		results, err := service.GetAvailableCarparks(request.Longitude, request.Latitude, request.Start, request.End)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
-	}
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"example/golang-learn/dtos"
 	"example/golang-learn/models"
 	"fmt"
 	"io"
@@ -245,6 +246,53 @@ func (s *CarparkService) ImportVehicles(filename string) error {
 		if err != nil {
 			log.Printf("Failed to upsert carpark %d: %v", cpId, err)
 		}
+	}
+
+	return nil
+}
+
+func (s *CarparkService) AddVehicleSchedule(req dtos.AddScheduleRequest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. Parse strings to time.Time (MongoDB needs Date objects, not strings)
+	startTime, err := time.Parse(time.RFC3339, req.Start)
+	if err != nil {
+		return fmt.Errorf("invalid start time: %w", err)
+	}
+	endTime, err := time.Parse(time.RFC3339, req.End)
+	if err != nil {
+		return fmt.Errorf("invalid end time: %w", err)
+	}
+
+	// 2. Define the filter (Find the Carpark)
+	filter := bson.M{"_id": req.CarparkId}
+
+	// 3. Define the Update logic
+	// We use "vehicles.$[v].schedules" where [v] is a placeholder for the matched vehicle
+	update := bson.M{
+		"$push": bson.M{
+			"vehicles.$[v].schedules": bson.M{
+				"bookingId": req.BookingId,
+				"start":     startTime,
+				"end":       endTime,
+			},
+		},
+	}
+
+	// 4. Define the ArrayFilter to identify which vehicle in the array gets the update
+	opts := options.UpdateOne().SetArrayFilters([]any{
+		bson.M{"v._id": req.VehicleId},
+	})
+
+	// 5. Execute
+	result, err := s.coll.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to update schedule: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("carpark %d or vehicle %d not found", req.CarparkId, req.VehicleId)
 	}
 
 	return nil
