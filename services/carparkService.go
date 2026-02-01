@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"example/golang-learn/dtos"
+	"example/golang-learn/models"
 	"fmt"
 	"time"
 
@@ -20,7 +20,7 @@ func NewCarparkService(coll *mongo.Collection) *CarparkService {
 	}
 }
 
-func (s *CarparkService) InsertCarpark(newCarpark *dtos.Carpark) error {
+func (s *CarparkService) InsertCarpark(newCarpark *models.Carpark) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -51,10 +51,10 @@ func (s *CarparkService) UpdatePostalCode(carparkName string, postalCode string)
 	return nil
 }
 
-func (s *CarparkService) GetCarpark(postalCode string) (*dtos.Carpark, error) {
+func (s *CarparkService) GetCarpark(postalCode string) (*models.Carpark, error) {
 	filter := bson.M{"postalCode": postalCode}
 
-	var carpark dtos.Carpark
+	var carpark models.Carpark
 	err := s.coll.FindOne(context.TODO(), filter).Decode(&carpark)
 	if err != nil {
 		return nil, fmt.Errorf("GetCarpark carpark %s not found", postalCode)
@@ -62,7 +62,7 @@ func (s *CarparkService) GetCarpark(postalCode string) (*dtos.Carpark, error) {
 	return &carpark, nil
 }
 
-func (s *CarparkService) GetCarparksByDistance(lon float64, lat float64) ([]dtos.Carpark, error) {
+func (s *CarparkService) GetCarparksByDistance(lon float64, lat float64) ([]models.Carpark, error) {
 	pipeline := mongo.Pipeline{
 		{
 			{Key: "$geoNear", Value: bson.D{
@@ -89,7 +89,7 @@ func (s *CarparkService) GetCarparksByDistance(lon float64, lat float64) ([]dtos
 		return nil, fmt.Errorf("GetCarparksByDistance could not aggregate %w", err)
 	}
 
-	var results []dtos.Carpark
+	var results []models.Carpark
 	if err = cursor.All(context.TODO(), &results); err != nil {
 		return nil, fmt.Errorf("GetCarparksByDistance could not parse %w", err)
 	}
@@ -117,7 +117,7 @@ func (s *CarparkService) DeleteVehicleFromCarpark(carparkName string, plateNumbe
 	return nil
 }
 
-func (s *CarparkService) AddVehicleToCarpark(carparkName string, vehicle *dtos.Vehicle) error {
+func (s *CarparkService) AddVehicleToCarpark(carparkName string, vehicle *models.Vehicle) error {
 	// 2. Filter: Find the specific carpark
 	filter := bson.M{"name": carparkName}
 

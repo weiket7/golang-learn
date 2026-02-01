@@ -1,4 +1,4 @@
-package dtos
+package models
 
 type Location struct {
 	Type        string    `bson:"type"`

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"example/golang-learn/controllers"
-	"example/golang-learn/dtos"
+	"example/golang-learn/models"
 	"example/golang-learn/services"
 	"example/golang-learn/utilities/db"
 	"fmt"
@@ -66,6 +66,7 @@ func main() {
 
 	database := client.Database("getgo")
 	collection := database.Collection("carparks")
+	settingCollection := database.Collection("settings")
 
 	env := v.GetString("ENVIRONMENT")
 	fmt.Println("started environment: ", env)
@@ -77,23 +78,23 @@ func main() {
 
 	carparkService := services.NewCarparkService(collection)
 
-	newCarpark := dtos.Carpark{
+	newCarpark := models.Carpark{
 		ID:         123,
 		Name:       "SB17",
 		PostalCode: "750503",
 		Address:    "504 MONTREAL DRIVE MONTREAL SPRING SINGAPORE 750504",
-		Location: dtos.Location{
+		Location: models.Location{
 			Type:        "Point",
 			Coordinates: []float64{103.823678171092, 1.45089251057067},
 		},
-		Lots: []dtos.Lot{
+		Lots: []models.Lot{
 			{Level: "5A", LotNumber: "355"},
 		},
-		Vehicles: []dtos.Vehicle{},
+		Vehicles: []models.Vehicle{},
 	}
 	err = carparkService.InsertCarpark(&newCarpark)
 
-	newVehicle := dtos.Vehicle{
+	newVehicle := models.Vehicle{
 		ID:             13,
 		MakeName:       "Mazda",
 		ModelName:      "2",
@@ -126,6 +127,11 @@ func main() {
 	//	fmt.Println(carpark)
 	//}
 
+	settingService := services.NewSettingService(settingCollection)
+	_ = settingService.Set("RadiusKm", "20")
+	//_ = settingService.Set("NewKey")
+	radius, _ := settingService.GetInt("RadiusKm", 20)
+	fmt.Printf("RadiusKm: %v\n", radius)
 	userService := services.NewUserService(ctx)
 	userController := controllers.NewUserController(ctx, userService)
 
