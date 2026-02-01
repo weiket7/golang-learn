@@ -2,12 +2,19 @@ package services
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/json"
 	"example/golang-learn/models"
 	"fmt"
+	"io"
+	"os"
+	"strconv"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type CarparkService struct {
@@ -29,7 +36,7 @@ func (s *CarparkService) InsertCarpark(newCarpark *models.Carpark) error {
 		return err
 	}
 
-	//fmt.Printf("Inserted Carpark with ID: %v\n", result.InsertedID)
+	//fmt.Printf("Inserted Carpark with VehicleId: %v\n", result.InsertedID)
 	return nil
 }
 
@@ -62,36 +69,64 @@ func (s *CarparkService) GetCarpark(postalCode string) (*models.Carpark, error) 
 	return &carpark, nil
 }
 
-func (s *CarparkService) GetCarparksByDistance(lon float64, lat float64) ([]models.Carpark, error) {
+func (s *CarparkService) GetAvailableCarparks(lon, lat float64, start, end time.Time) ([]models.Carpark, error) {
+	// 1. Ensure UTC for MongoDB compatibility
+	start = start.UTC()
+	end = end.UTC()
+
 	pipeline := mongo.Pipeline{
-		{
-			{Key: "$geoNear", Value: bson.D{
-				{Key: "near", Value: bson.D{
-					{Key: "type", Value: "Point"},
-					{Key: "coordinates", Value: []float64{lon, lat}},
-				}},
-				{Key: "distanceField", Value: "dist"}, // Field added to output
-				{Key: "spherical", Value: true},       // Required for 2dsphere
+		// Stage 1: Geospatial search (20km radius)
+		{{Key: "$geoNear", Value: bson.D{
+			{Key: "near", Value: bson.D{
+				{Key: "type", Value: "Point"},
+				{Key: "coordinates", Value: []float64{lon, lat}},
 			}},
-		},
-		// Optional: Only return the car park name and the distance
-		//{
-		//	{Key: "$project", Value: bson.D{
-		//		{Key: "name", Value: 1},
-		//		{Key: "dist", Value: 1},
-		//		{Key: "_id", Value: 0},
-		//	}},
-		//},
-	}
+			{Key: "distanceField", Value: "dist"},
+			{Key: "spherical", Value: true},
+			{Key: "maxDistance", Value: 20000},
+		}}},
+
+		// Stage 2: Calculate availability
+		{{Key: "$addFields", Value: bson.D{
+			{Key: "availableVehicles", Value: bson.D{
+				{Key: "$size", Value: bson.D{
+					{Key: "$filter", Value: bson.D{
+						// Handle potential null vehicles array
+						{Key: "input", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$vehicles", bson.A{}}}}},
+						{Key: "as", Value: "v"},
+						{Key: "cond", Value: bson.D{
+							{Key: "$eq", Value: bson.A{
+								bson.D{{Key: "$size", Value: bson.D{
+									{Key: "$filter", Value: bson.D{
+										// Note: Your data uses "schedules" (plural)
+										{Key: "input", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$$v.schedules", bson.A{}}}}},
+										{Key: "as", Value: "sch"},
+										{Key: "cond", Value: bson.D{
+											{Key: "$and", Value: bson.A{
+												// Overlap: existing.start < requested.end AND existing.end > requested.start
+												bson.D{{Key: "$lt", Value: bson.A{"$$sch.start", end}}},
+												bson.D{{Key: "$gt", Value: bson.A{"$$sch.end", start}}},
+											}},
+										}},
+									}},
+								}}},
+								0, // No overlapping schedules means vehicle is available
+							}},
+						}},
+					}},
+				}}},
+			}},
+		}}}
 
 	cursor, err := s.coll.Aggregate(context.TODO(), pipeline)
 	if err != nil {
-		return nil, fmt.Errorf("GetCarparksByDistance could not aggregate %w", err)
+		return nil, fmt.Errorf("aggregation failed: %w", err)
 	}
+	defer cursor.Close(context.TODO())
 
 	var results []models.Carpark
-	if err = cursor.All(context.TODO(), &results); err != nil {
-		return nil, fmt.Errorf("GetCarparksByDistance could not parse %w", err)
+	if err := cursor.All(context.TODO(), &results); err != nil {
+		return nil, fmt.Errorf("decoding failed: %w", err)
 	}
 
 	return results, nil
@@ -134,7 +169,83 @@ func (s *CarparkService) AddVehicleToCarpark(carparkName string, vehicle *models
 		return err
 	}
 	if result == nil || result.ModifiedCount == 0 {
-		return fmt.Errorf("AddVehicleToCarpark could not add vehicle %s to carpark %s", vehicle.ID, carparkName)
+		return fmt.Errorf("AddVehicleToCarpark could not add vehicle %s to carpark %s", vehicle.Id, carparkName)
 	}
+	return nil
+}
+
+func (s *CarparkService) ImportVehicles(filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	if _, err := reader.Read(); err != nil {
+		return fmt.Errorf("failed to read header: %w", err)
+	}
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		// 1. Parse Data
+		vId, _ := strconv.Atoi(record[0])
+		numSeats, _ := strconv.Atoi(record[2])
+		cpId, _ := strconv.Atoi(record[4])
+		lat, _ := strconv.ParseFloat(record[8], 64)
+		lon, _ := strconv.ParseFloat(record[9], 64)
+
+		var cpLots []models.Lot
+		json.Unmarshal([]byte(record[15]), &cpLots)
+
+		// 2. Prepare the Vehicle object
+		newVehicle := models.Vehicle{
+			Id:             vId,
+			MakeName:       record[10],
+			ModelName:      record[11],
+			PlateNumber:    record[1],
+			Seats:          numSeats,
+			PriceGroupName: record[13],
+			Images:         []string{record[14]},
+			Schedules:      []models.Schedule{},
+		}
+
+		// 3. Define the Filter (Find the carpark by ID)
+		filter := bson.M{"_id": cpId}
+
+		// 4. Define the Atomic Update
+		update := bson.M{
+			// $setOnInsert only runs when the document is being CREATED
+			"$setOnInsert": bson.M{
+				"name":       record[5],
+				"postalCode": record[7],
+				"address":    record[6],
+				"location": bson.M{
+					"type":        "Point",
+					"coordinates": []float64{lon, lat},
+				},
+				"lots": cpLots,
+			},
+			// $addToSet adds the vehicle only if it doesn't already exist in the array
+			"$addToSet": bson.M{
+				"vehicles": newVehicle,
+			},
+		}
+
+		// 5. Execute Upsert
+		opts := options.UpdateOne().SetUpsert(true)
+		_, err = s.coll.UpdateOne(context.Background(), filter, update, opts)
+		if err != nil {
+			log.Printf("Failed to upsert carpark %d: %v", cpId, err)
+		}
+	}
+
 	return nil
 }

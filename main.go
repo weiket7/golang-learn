@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"example/golang-learn/controllers"
-	"example/golang-learn/models"
+	"example/golang-learn/dtos"
 	"example/golang-learn/services"
 	"example/golang-learn/utilities/db"
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/rs/zerolog"
@@ -78,41 +80,45 @@ func main() {
 
 	carparkService := services.NewCarparkService(collection)
 
-	newCarpark := models.Carpark{
-		ID:         123,
-		Name:       "SB17",
-		PostalCode: "750503",
-		Address:    "504 MONTREAL DRIVE MONTREAL SPRING SINGAPORE 750504",
-		Location: models.Location{
-			Type:        "Point",
-			Coordinates: []float64{103.823678171092, 1.45089251057067},
-		},
-		Lots: []models.Lot{
-			{Level: "5A", LotNumber: "355"},
-		},
-		Vehicles: []models.Vehicle{},
-	}
-	err = carparkService.InsertCarpark(&newCarpark)
+	//newCarpark := models.Carpark{
+	//	Id:         123,
+	//	Name:       "SB17",
+	//	PostalCode: "750503",
+	//	Address:    "504 MONTREAL DRIVE MONTREAL SPRING SINGAPORE 750504",
+	//	Location: models.Location{
+	//		Type:        "Point",
+	//		Coordinates: []float64{103.823678171092, 1.45089251057067},
+	//	},
+	//	Lots: []models.Lot{
+	//		{Level: "5A", LotNumber: "355"},
+	//	},
+	//	Vehicles: []models.Vehicle{},
+	//}
+	//err = carparkService.InsertCarpark(&newCarpark)
 
-	newVehicle := models.Vehicle{
-		ID:             13,
-		MakeName:       "Mazda",
-		ModelName:      "2",
-		PlateNumber:    "SLR9553A",
-		Seats:          5,
-		Images:         []string{"c57ab461-9df3-43ad-b541-051cc95c8c45_car.png"},
-		PriceGroupName: "Standard",
-	}
-	err = carparkService.AddVehicleToCarpark("SB17", &newVehicle)
-	if err != nil {
-		fmt.Println(err)
-		fmt.Println("error adding vehicle to carpark")
-	}
+	//newVehicle := models.Vehicle{
+	//	Id:             13,
+	//	MakeName:       "Mazda",
+	//	ModelName:      "2",
+	//	PlateNumber:    "SLR9553A",
+	//	Seats:          5,
+	//	Images:         []string{"c57ab461-9df3-43ad-b541-051cc95c8c45_car.png"},
+	//	PriceGroupName: "Standard",
+	//}
+	//err = carparkService.AddVehicleToCarpark("SB17", &newVehicle)
+	//if err != nil {
+	//	fmt.Println(err)
+	//	fmt.Println("error adding vehicle to carpark")
+	//}
 
-	carpark, err := carparkService.GetCarpark("750503")
-	fmt.Println(carpark)
+	//err = carparkService.ImportVehicles("vehicles.csv")
 
-	carparks, err := carparkService.GetCarparksByDistance(103.820052, 1.449466)
+	//carpark, err := carparkService.GetCarpark("750504")
+	//fmt.Println(carpark)
+
+	reqStart := time.Date(2026, 2, 2, 10, 0, 0, 0, time.UTC)
+	reqEnd := time.Date(2026, 2, 2, 11, 30, 0, 0, time.UTC)
+	carparks, err := carparkService.GetAvailableCarparks(103.820052, 1.449466, reqStart, reqEnd)
 	for _, c := range carparks {
 		fmt.Printf("Carpark: %v | Distance: %.2f meters\n", c.Name, c.Distance)
 	}
@@ -141,9 +147,35 @@ func main() {
 	mux.HandleFunc("POST /users", userController.CreateUser)
 	mux.HandleFunc("GET /users/{id}", userController.GetUser)
 	mux.HandleFunc("DELETE /users/{id}", userController.DeleteUser)
+	mux.HandleFunc("GET /carparks", getCarparks(carparkService))
 
 	fmt.Println("Server listening to :8081")
 	http.ListenAndServe(":8081", mux)
+}
+
+func getCarparks(service *services.CarparkService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request dtos.CarparksRequest
+
+		// Note: GET requests usually don't have a body.
+		// If you are using a Body, ensure the client sends one,
+		// otherwise, you'd parse from r.URL.Query()
+		err := json.NewDecoder(r.Body).Decode(&request)
+		if err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Now you can use the service!
+		results, err := service.GetAvailableCarparks(request.Longitude, request.Latitude, request.Start, request.End)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	}
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
